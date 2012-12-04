@@ -12,7 +12,7 @@ function upload_head() {
 }
 function upload_extra($uploadlimit, $passedalbum) {
 	global $_zp_current_admin_obj;
-	$uploadlimit=104857600;
+	$uploadlimit=10485760000;
 	?>
 	<script type="text/javascript">
 		// <!-- <![CDATA[
