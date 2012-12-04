@@ -285,6 +285,7 @@ class UploadHandler
 
 	private function handle_file_upload($uploaded_file, $name, $size, $type, $error, $index = null, $content_range = null) {
 		global $folder, $targetPath, $_zp_current_admin_obj;
+		$album = new Album(NULL, $folder);
 		$file = new stdClass();
         $file->name = $this->trim_file_name($name, $type, $index, $content_range);
         $file->size = $this->fix_integer_overflow(intval($size));
@@ -307,35 +308,6 @@ class UploadHandler
                     );
 				} else {
 					move_uploaded_file($uploaded_file, $file_path);
-//ZenPhoto stuff
-/*					if (is_valid_image($name) || is_valid_other_type($name)) {
-						@chmod($targetFile, FILE_MOD);
-						$album = new Album(NULL, $folder);
-						//ZenPhoto SEO        
-								$seoname = seoFriendly($name);
-								if (strrpos($seoname,'.')===0) $seoname = sha1($name).$seoname; // soe stripped out all the name.
-								$targetFile =  $targetPath.'/'.internalToFilesystem($seoname);
-								if (file_exists($targetFile)) {
-									$append = '_'.time();
-									$seoname = stripSuffix($seoname).$append.'.'.getSuffix($seoname);
-									$targetFile =  $targetPath.'/'.internalToFilesystem($seoname);
-								}
-								$file->name = $seoname;
-						//End ZenPhoto SEO
-						$image = newImage($album, $seoname);
-						$image->setOwner($_zp_current_admin_obj->getUser());
-						if ($name != $seoname && $image->getTitle() == substr($seoname, 0, strrpos($seoname, '.'))) {
-							$image->setTitle(stripSuffix($name, '.'));
-						}
-						$image->save();
-					} else if (is_zip($targetFile)) {
-						unzip($targetFile, $targetPath);
-						unlink($targetFile);
-					} else {
-						$error = UPLOAD_ERR_EXTENSION;	// invalid file uploaded
-						break;
-					}
-//End ZenPhoto stuff */
 				}
 			} else {
 				// Non-multipart uploads (PUT method support)
@@ -345,7 +317,6 @@ class UploadHandler
                     $append_file ? FILE_APPEND : 0
                 );
 			}
-//			$file_size = filesize($file_path);
             $file_size = $this->get_file_size($file_path, $append_file);
 			if ($file_size === $file->size) {
 				$file->url = $this->options['upload_url'].rawurlencode($file->name);
