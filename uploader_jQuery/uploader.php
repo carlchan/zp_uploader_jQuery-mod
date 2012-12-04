@@ -210,51 +210,118 @@ class UploadHandler
 		}
 		return $error;
 	}
-
-	private function trim_file_name($name, $type) {
-		// Remove path information and dots around the filename, to prevent uploading
-		// into different directories or replacing hidden system files.
-		// Also remove control characters and spaces (\x00..\x20) around the filename:
-		$file_name = trim(basename(stripslashes($name)), ".\x00..\x20");
-		// Add missing file extension for known image types:
-		if (strpos($file_name, '.') === false &&
-		preg_match('/^image\/(gif|jpe?g|png)/', $type, $matches)) {
-			$file_name .= '.'.$matches[1];
+//////New functions
+    protected function get_user_path() {
+        if ($this->options['user_dirs']) {
+            return $this->get_user_id().'/';
+        }
+        return '';
+    }
+    protected function get_upload_path($file_name = null, $version = null) {
+        $file_name = $file_name ? $file_name : '';
+        $version_path = empty($version) ? '' : $version.'/';
+        return $this->options['upload_dir'].$this->get_user_path()
+            .$version_path.$file_name;
+    }
+    // Fix for overflowing signed 32 bit integers,
+    // works for sizes up to 2^32-1 bytes (4 GiB - 1):
+    protected function fix_integer_overflow($size) {
+        if ($size < 0) {
+            $size += 2.0 * (PHP_INT_MAX + 1);
+        }
+        return $size;
+    }
+    protected function get_file_size($file_path, $clear_stat_cache = false) {
+        if ($clear_stat_cache) {
+            clearstatcache();
+        }
+		if (is_file($file_path)) {
+	        return $this->fix_integer_overflow(filesize($file_path));
+		} else {
+			return 0;
 		}
-		return $file_name;
-	}
+    }
+    protected function upcount_name_callback($matches) {
+        $index = isset($matches[1]) ? intval($matches[1]) + 1 : 1;
+        $ext = isset($matches[2]) ? $matches[2] : '';
+        return ' ('.$index.')'.$ext;
+    }
+    protected function upcount_name($name) {
+        return preg_replace_callback(
+            '/(?:(?: \(([\d]+)\))?(\.[^.]+))?$/',
+            array($this, 'upcount_name_callback'),
+            $name,
+            1
+        );
+    }
+    protected function handle_form_data($file, $index) {
+        // Handle form data, e.g. $_REQUEST['description'][$index]
+    }
+/////////
 
-	private function handle_file_upload($uploaded_file, $name, $size, $type, $error) {
+    protected function trim_file_name($name, $type, $index, $content_range) {
+        // Remove path information and dots around the filename, to prevent uploading
+        // into different directories or replacing hidden system files.
+        // Also remove control characters and spaces (\x00..\x20) around the filename:
+        $file_name = trim(basename(stripslashes($name)), ".\x00..\x20");
+        // Add missing file extension for known image types:
+        if (strpos($file_name, '.') === false &&
+            preg_match('/^image\/(gif|jpe?g|png)/', $type, $matches)) {
+            $file_name .= '.'.$matches[1];
+        }
+        while(is_dir($this->get_upload_path($file_name))) {
+            $file_name = $this->upcount_name($file_name);
+        }
+        $uploaded_bytes = $this->fix_integer_overflow(intval($content_range[1]));
+        while(is_file($this->get_upload_path($file_name))) {
+            if ($uploaded_bytes === $this->get_file_size(
+                    $this->get_upload_path($file_name))) {
+                break;
+            }
+            $file_name = $this->upcount_name($file_name);
+        }
+        return $file_name;
+    }
+
+	private function handle_file_upload($uploaded_file, $name, $size, $type, $error, $index = null, $content_range = null) {
 		global $folder, $targetPath, $_zp_current_admin_obj;
 		$file = new stdClass();
-		$name = $this->trim_file_name($name, $type);
-		$seoname = seoFriendly($name);
-		if (strrpos($seoname,'.')===0) $seoname = sha1($name).$seoname; // soe stripped out all the name.
-		$targetFile =  $targetPath.'/'.internalToFilesystem($seoname);
-		if (file_exists($targetFile)) {
-			$append = '_'.time();
-			$seoname = stripSuffix($seoname).$append.'.'.getSuffix($seoname);
-			$targetFile =  $targetPath.'/'.internalToFilesystem($seoname);
-		}
-		$file->name = $seoname;
-
-		$file->size = intval($size);
-		$file->type = $type;
+        $file->name = $this->trim_file_name($name, $type, $index, $content_range);
+        $file->size = $this->fix_integer_overflow(intval($size));
+        $file->type = $type;
 		$error = $this->has_error($uploaded_file, $file, $error);
 		if (!$error && $file->name) {
-			$file_path = $this->options['upload_dir'].$file->name;
-			$append_file = !$this->options['discard_aborted_uploads'] &&
-			is_file($file_path) && $file->size > filesize($file_path);
-			clearstatcache();
+			$this->handle_form_data($file, $index);
+			$upload_dir = $this->get_upload_path();
+            $file_path = $this->get_upload_path($file->name);
+            $append_file = $content_range && is_file($file_path) && $file->size > $this->get_file_size($file_path);
+//get_file_size now knows when to clearstatcache, not needed explicitly
+//			clearstatcache();
 			if ($uploaded_file && is_uploaded_file($uploaded_file)) {
 				// multipart/formdata uploads (POST method uploads)
 				if ($append_file) {
-					file_put_contents($file_path,fopen($uploaded_file, 'r'),FILE_APPEND);
+                    file_put_contents(
+                        $file_path,
+                        fopen($uploaded_file, 'r'),
+                        FILE_APPEND
+                    );
 				} else {
 					move_uploaded_file($uploaded_file, $file_path);
-					if (is_valid_image($name) || is_valid_other_type($name)) {
+//ZenPhoto stuff
+/*					if (is_valid_image($name) || is_valid_other_type($name)) {
 						@chmod($targetFile, FILE_MOD);
 						$album = new Album(NULL, $folder);
+						//ZenPhoto SEO        
+								$seoname = seoFriendly($name);
+								if (strrpos($seoname,'.')===0) $seoname = sha1($name).$seoname; // soe stripped out all the name.
+								$targetFile =  $targetPath.'/'.internalToFilesystem($seoname);
+								if (file_exists($targetFile)) {
+									$append = '_'.time();
+									$seoname = stripSuffix($seoname).$append.'.'.getSuffix($seoname);
+									$targetFile =  $targetPath.'/'.internalToFilesystem($seoname);
+								}
+								$file->name = $seoname;
+						//End ZenPhoto SEO
 						$image = newImage($album, $seoname);
 						$image->setOwner($_zp_current_admin_obj->getUser());
 						if ($name != $seoname && $image->getTitle() == substr($seoname, 0, strrpos($seoname, '.'))) {
@@ -268,14 +335,18 @@ class UploadHandler
 						$error = UPLOAD_ERR_EXTENSION;	// invalid file uploaded
 						break;
 					}
+//End ZenPhoto stuff */
 				}
 			} else {
 				// Non-multipart uploads (PUT method support)
-				file_put_contents(
-				$file_path,
-				fopen('php://input', 'r'),	$append_file ? FILE_APPEND : 0);
+                file_put_contents(
+                    $file_path,
+                    fopen('php://input', 'r'),
+                    $append_file ? FILE_APPEND : 0
+                );
 			}
-			$file_size = filesize($file_path);
+//			$file_size = filesize($file_path);
+            $file_size = $this->get_file_size($file_path, $append_file);
 			if ($file_size === $file->size) {
 				$file->url = $this->options['upload_url'].rawurlencode($file->name);
 				foreach($this->options['image_versions'] as $version => $options) {
@@ -283,7 +354,7 @@ class UploadHandler
 						$file->{$version.'_url'} = $options['upload_url'].rawurlencode($file->name);
 					}
 				}
-			} else if ($this->options['discard_aborted_uploads']) {
+			} else if (!$content_range && $this->options['discard_aborted_uploads']) {
 				@chmod($file_path, 0666);
 				unlink($file_path);
 				$file->error = 'abort';
@@ -313,30 +384,44 @@ class UploadHandler
 		$upload = isset($_FILES[$this->options['param_name']]) ?
 		$_FILES[$this->options['param_name']] : null;
 		$info = array();
+        // Parse the Content-Disposition header, if available:
+        $file_name = isset($_SERVER['HTTP_CONTENT_DISPOSITION']) ?
+            rawurldecode(preg_replace(
+                '/(^[^"]+")|("$)/',
+                '',
+                $_SERVER['HTTP_CONTENT_DISPOSITION']
+            )) : null;
+		// Parse the Content-Range header, which has the following form:
+        // Content-Range: bytes 0-524287/2000000
+        $content_range = isset($_SERVER['HTTP_CONTENT_RANGE']) ?
+            preg_split('/[^0-9]+/', $_SERVER['HTTP_CONTENT_RANGE']) : null;
+        $size =  $content_range ? $content_range[3] : null;
 		if ($upload && is_array($upload['tmp_name'])) {
 			foreach ($upload['tmp_name'] as $index => $value) {
 				$info[] = $this->handle_file_upload(
-																						$upload['tmp_name'][$index],
-																						isset($_SERVER['HTTP_X_FILE_NAME']) ?
-																						$_SERVER['HTTP_X_FILE_NAME'] : $upload['name'][$index],
-																						isset($_SERVER['HTTP_X_FILE_SIZE']) ?
-																						$_SERVER['HTTP_X_FILE_SIZE'] : $upload['size'][$index],
-																						isset($_SERVER['HTTP_X_FILE_TYPE']) ?
-																						$_SERVER['HTTP_X_FILE_TYPE'] : $upload['type'][$index],
-																						$upload['error'][$index]
-																						);
+					$upload['tmp_name'][$index],
+					$file_name ? $file_name : $upload['name'][$index],
+					$size ? $size : $upload['size'][$index],
+					isset($_SERVER['HTTP_X_FILE_TYPE']) ?
+					$_SERVER['HTTP_X_FILE_TYPE'] : $upload['type'][$index],
+					$upload['error'][$index],
+					$index,
+					$content_range
+					);
 			}
 		} elseif ($upload) {
 			$info[] = $this->handle_file_upload(
-																					$upload['tmp_name'],
-																					isset($_SERVER['HTTP_X_FILE_NAME']) ?
-																					$_SERVER['HTTP_X_FILE_NAME'] : $upload['name'],
-																					isset($_SERVER['HTTP_X_FILE_SIZE']) ?
-																					$_SERVER['HTTP_X_FILE_SIZE'] : $upload['size'],
-																					isset($_SERVER['HTTP_X_FILE_TYPE']) ?
-																					$_SERVER['HTTP_X_FILE_TYPE'] : $upload['type'],
-																					$upload['error']
-																					);
+					$upload['tmp_name'],
+					isset($_SERVER['HTTP_X_FILE_NAME']) ?
+					$_SERVER['HTTP_X_FILE_NAME'] : $upload['name'],
+					isset($_SERVER['HTTP_X_FILE_SIZE']) ?
+					$_SERVER['HTTP_X_FILE_SIZE'] : $upload['size'],
+					isset($_SERVER['HTTP_X_FILE_TYPE']) ?
+					$_SERVER['HTTP_X_FILE_TYPE'] : $upload['type'],
+					$upload['error'],
+					null,
+					$content_range
+					);
 		}
 		header('Vary: Accept');
 		if (isset($_SERVER['HTTP_ACCEPT']) &&	(strpos($_SERVER['HTTP_ACCEPT'], 'application/json') !== false)) {

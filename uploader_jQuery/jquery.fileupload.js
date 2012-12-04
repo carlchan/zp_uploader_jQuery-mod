@@ -76,7 +76,8 @@
             // to a preferred maximum chunk size. If set to 0, null or undefined,
             // or the browser does not support the required Blob API, files will
             // be uploaded as a whole.
-            maxChunkSize: 262144,
+//            maxChunkSize: 4194304,
+            maxChunkSize: 1048576,
             // When a non-multipart upload or a chunked multipart upload has been
             // aborted, this option can be used to resume the upload by setting
             // it to the size of the already uploaded bytes. This option is most
@@ -270,7 +271,7 @@
                         });
                     }
             }
-            if (options.multipart && typeof FormData !== 'undefined') {
+//            if (options.multipart && typeof FormData !== 'undefined') {
                 if (options.formData instanceof FormData) {
                     formData = options.formData;
                 } else {
@@ -284,7 +285,6 @@
                             encodeURI(file.name) + '"';
                         options.headers['Content-Description'] = encodeURI(file.type);
                         formData.append(paramName, options.blob, file.name);
-
                 } else {
                     $.each(options.files, function (index, file) {
                         // File objects are also Blob instances.
@@ -292,12 +292,16 @@
                         // dummy objects:
                             if ((window.Blob && file instanceof Blob) ||
                                     (window.File && file instanceof File)) {
-                            formData.append(options.paramName, file);
+                                formData.append(
+                                    options.paramName[index] || paramName,
+                                    file,
+                                    file.name
+                                );
                         }
                     });
                 }
                 options.data = formData;
-            }
+ //           }
             // Blob reference is not needed anymore, free memory:
             options.blob = null;
         },
@@ -642,26 +646,42 @@
                 result = true,
                 options = $.extend({}, this.options, data),
                 limit = options.limitMultiFileUploads,
+                paramName = this._getParamName(options),
+                paramNameSet,
+                paramNameSlice,
                 fileSet,
                 i;
             if (!(options.singleFileUploads || limit) ||
                     !this._isXHRUpload(options)) {
                 fileSet = [data.files];
+                paramNameSet = [paramName];
             } else if (!options.singleFileUploads && limit) {
                 fileSet = [];
+                paramNameSet = [];
                 for (i = 0; i < data.files.length; i += limit) {
                     fileSet.push(data.files.slice(i, i + limit));
+                    paramNameSlice = paramName.slice(i, i + limit);
+                    if (!paramNameSlice.length) {
+                        paramNameSlice = paramName;
+                    }
+                    paramNameSet.push(paramNameSlice);
                 }
-            }    
+            } else {
+                paramNameSet = paramName;
+            }
             data.originalFiles = data.files;
             $.each(fileSet || data.files, function (index, element) {
-                var files = fileSet ? element : [element],
-                    newData = $.extend({}, data, {files: files});
+                var newData = $.extend({}, data);
+                newData.files = fileSet ? element : [element];
+                newData.paramName = paramNameSet[index];
                 newData.submit = function () {
-                    return (that._trigger('submit', e, newData) !== false) &&
-                        that._onSend(e, newData);
+                    newData.jqXHR = this.jqXHR =
+                        (that._trigger('submit', e, this) !== false) &&
+                        that._onSend(e, this);
+                    return this.jqXHR;
                 };
-                return (result = that._trigger('add', e, newData));
+                result = that._trigger('add', e, newData);
+                return result;
             });
             return result;
         },
